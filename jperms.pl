@@ -4,8 +4,19 @@
 
 use strict;
 use warnings;
-
 use File::Find;
+use Getopt::Long;
+use Pod::Usage;
+
+# Get command line options
+#
+my %options;
+GetOptions(\%options, 'help|?|h', 'man', 'verbose', 'dir=s', 'no_run');
+pod2usage(1) if $options{help};
+pod2usage(-exitval => 1, -verbose => 2) if $options{man};
+
+
+# Process pattern rules
 
 my $patterns_config = '
   # pattern                      owner   group  dperm    fperm
@@ -25,32 +36,14 @@ my $patterns_config = '
   \./test	                     appuser appgrp  775      -
 ';
 
-use Getopt::Long;
-use Pod::Usage;
-my $verbose = '';
-my $help = '';
-my $man = '';
-my $dir = '';
-my $no_run = '1'; # TODO
-
-GetOptions('help|?|h' => \$help,
-           'man'      => \$man,
-           'verbose'    => \$verbose,
-           'dir=s'    => \$dir,
-           'no_run'    => \$no_run,
-);
-
-pod2usage(1) if $help;
-pod2usage(-exitval => 1, -verbose => 2) if $man;
-
-print "parsing pattern rules...\n" if $verbose;
+print "parsing pattern rules...\n" if $options{verbose};
 
 my %pattern_details = ();
 my @pattern_list = ();
 
 for my $line (split("\n", $patterns_config)) {
 
-  print "pattern line = $line\n" if $verbose;
+  print "pattern line = $line\n" if $options{verbose};
 
   my ($pattern, $owner, $group, $dperm, $fperm) = split(' ', $line);
   next if (!defined $pattern || $pattern =~ /^ *#/);  # skip comments
@@ -67,6 +60,9 @@ for my $line (split("\n", $patterns_config)) {
 }
 
 sub get_id {
+  # Safely convert user or group name to a numerical id suitable
+  # for use with chown. -1 is returned if user or group not found,
+  # which will tell chown to leaving user or group un-altered.
   my ($name, $sub) = @_;
   my $id = $sub->($name);
   return $id if (defined $id);
@@ -74,7 +70,7 @@ sub get_id {
 }
 
 sub oct_str_to_perm {
-  # safely convert string to octal
+  # safely convert octal string mode to numeric for use with chmod
   my ($str) = @_;
   if (substr($str, 0, 1) ne '0') {
     $str = '0' . $str;
@@ -82,7 +78,8 @@ sub oct_str_to_perm {
   return oct($str);
 }
 
-print "starting descent at $dir\n" if $verbose;
+print "starting descent at $options{dir}\n" if $options{verbose};
+
 find({no_chdir => 1, wanted => sub {
   #print '$File::Find::dir  = ' . $File::Find::dir  . "\n";
   #print '$_                = ' . $_                . "\n";
@@ -91,19 +88,19 @@ find({no_chdir => 1, wanted => sub {
   my $f = $File::Find::name;   # the current path, relative to top dir
                             # and including filename
 
-  print "$f\n" if $verbose;
+  print "$f\n" if $options{verbose};
 
   for my $pattern (@pattern_list) {
     if ($f =~ /^${pattern}$/) {
 
-      print "$f matches pattern $pattern\n" if $verbose;
+      print "$f matches pattern $pattern\n" if $options{verbose};
 
       my $pa = $pattern_details{$pattern};
       #use Data::Dumper;
       #print Dumper $pa;
 
 
-      if ($no_run) {
+      if ($options{no_run}) {
         # TODO - improve output
         my $new_owner = $pa->{owner} . ':' . $pa->{group};
         print "chown $new_owner $f\n" if ($new_owner ne ':');
@@ -112,6 +109,8 @@ find({no_chdir => 1, wanted => sub {
         print "chown $uid, $gid, $f\n";
       } else {
         # TODO - really run it
+        #chown $uid, $gid, $f;
+        # TODO - check status
       }
 
       #print $pa->{dperm} . "\n";
@@ -120,17 +119,18 @@ find({no_chdir => 1, wanted => sub {
       #print 'cwd = ' . getcwd() . "\n";
       #print "dir\n" if (-d "$f");
       if ($pa->{dperm} ne '-' && -d $f) {
-        if ($no_run) {
+        if ($options{no_run}) {
           print 'chmod ' . oct_str_to_perm($pa->{dperm}) .
                 '(' . $pa->{dperm} . "), $f # DIR\n";
         } else {
           # TODO - uncomment
           #chmod oct_str_to_perm($pa->{dperm}), $f;
+          # TODO - check status
         }
       }
 
       if ($pa->{fperm} ne '-' && -f $f) {
-        if ($no_run) {
+        if ($options{no_run}) {
           print 'chmod ' . oct_str_to_perm($pa->{fperm}) .
                 '(' . $pa->{fperm} . "), $f # FILE\n";
         } else {
@@ -142,7 +142,7 @@ find({no_chdir => 1, wanted => sub {
       return;
     }
   }
-}}, $dir);
+}}, $options{dir});
 
 __END__
 
@@ -192,6 +192,8 @@ directory, where appropriate (see below).
 
 - A value of '-' for any or all of owner, group, dir_perms or file_perms
 means that this attribute are to be un-altered when a match is found.
+
+- file or dir perms must be specified in octal
 
 - A pattern may match both files and directories, but dir_perms are only ever
 applied to directories, and file_perms are only applied to files
